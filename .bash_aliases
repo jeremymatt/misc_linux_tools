@@ -1,6 +1,12 @@
 #!/bin/bash
 
-alias tm='tmux new-session -A -s'
+tm() {
+    if [ $# -eq 0 ]; then
+        tmux ls
+    else
+        tmux new-session -A -s "$1"
+    fi
+}
 
 git_acp() {
         git add -A

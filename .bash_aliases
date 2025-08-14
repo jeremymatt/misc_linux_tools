@@ -1,5 +1,11 @@
 #!/bin/bash
 
+git_acp() {
+        git add -A
+        git commit -m "$1"
+        git push
+}
+
 tm() {
     if [ $# -eq 0 ]; then
         tmux ls
@@ -8,11 +14,6 @@ tm() {
     fi
 }
 
-git_acp() {
-        git add -A
-        git commit -m "$1"
-        git push
-}
 
 alias short_prompt="export PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\W\[\033[00m\]\$ '"
 alias long_prompt="export PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '"

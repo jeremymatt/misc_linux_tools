@@ -44,24 +44,47 @@ git_clone() {
             # Skip empty lines and comments
             [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
             
-            # Remove leading/trailing whitespace and quotes
-            key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^["'"'"']*//;s/["'"'"']*$//')
-            
+            key=$(echo "$key" | tr '[:lower:]' '[:upper:]')
             case "$key" in
-                USERNAME) username="$value" ;;
-                TOKEN) token="$value" ;;
-                GIT_HOST) git_host="$value" ;;
-                GIT_ACCOUNT) git_account="$value" ;;
+                USERNAME)
+                    username="$value"
+                    ;;
+                TOKEN)
+                    token="$value"
+                    ;;
+                GIT_HOST)
+                    git_host="$value"
+                    ;;
+                GIT_ACCOUNT)
+                    git_account="$value"
+                    ;;
             esac
         done < "$config_file"
-    else
-        echo "Warning: Config file not found at $config_file" >&2
-        echo "Create it with your default values or use command line flags" >&2
-        echo "" >&2
     fi
     
-    # Parse command line arguments
+    # Function to display help
+    local show_help=false
+    show_git_clone_usage() {
+        echo "Usage: git_clone [options] <repository-name>"
+        echo ""
+        echo "Options:"
+        echo "  -u, --username USER     Git username (overrides config file)"
+        echo "  -t, --token TOKEN       Git token (overrides config file)"
+        echo "  -h, --host HOST         Git host (default: gitlab.com)"
+        echo "  -a, --account ACCOUNT   Git account/organization name"
+        echo "  --init-config           Create a default config file at $config_file"
+        echo "  --update-token          Update the remote URL for the current repository"
+        echo "  --update-token-command  Print the remote update command instead of running it"
+        echo "  --help                  Show this help message"
+        echo ""
+        echo "Config file format ($config_file):"
+        echo "  USERNAME=your_git_username"
+        echo "  TOKEN=your_git_token"
+        echo "  GIT_HOST=gitlab.com"
+        echo "  GIT_ACCOUNT=your_git_account_or_organization"
+    }
+    
+    # Parse command-line arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
             -u|--username)
@@ -80,20 +103,13 @@ git_clone() {
                 git_account="$2"
                 shift 2
                 ;;
-            --config)
-                echo "Current config file location: $config_file"
-                if [[ -f "$config_file" ]]; then
-                    echo "Config file contents:"
-                    # Show config but hide token value for security
-                    sed 's/TOKEN=.*/TOKEN=[HIDDEN]/' "$config_file"
-                else
-                    echo "Config file does not exist"
-                fi
-                return 0
-                ;;
             --init-config)
-                echo "Creating example config file at $config_file"
-                cat > "$config_file" << EOF
+                if [[ -f "$config_file" ]]; then
+                    echo "Config file already exists at $config_file"
+                    echo "Edit it manually to change values."
+                else
+                    echo "Creating default config file at $config_file"
+                    cat > "$config_file" << EOF
 # Git Clone Configuration File
 # Remove the # to uncomment and set your values
 
@@ -102,58 +118,84 @@ git_clone() {
 # GIT_HOST=gitlab.com
 # GIT_ACCOUNT=your_git_account_or_organization
 EOF
-                echo "Config file created. Edit $config_file with your values."
+                    echo "Config file created. Edit $config_file with your values."
+                fi
                 return 0
                 ;;
-            --update-token)
+            --update-token|--update-token-command)
+                # Determine mode: apply change or just print the command
+                local print_only="false"
+                if [[ "$1" == "--update-token-command" ]]; then
+                    print_only="true"
+                fi
+
                 # Check if we're in a git repository
                 if ! git rev-parse --git-dir > /dev/null 2>&1; then
                     echo "Error: Not in a git repository" >&2
                     return 1
                 fi
-                
+
                 # Get current remote URL
                 local current_url
                 current_url=$(git config --get remote.origin.url)
-                
+
                 if [[ -z "$current_url" ]]; then
                     echo "Error: No origin remote found" >&2
                     return 1
                 fi
-                
+
                 # Check if current URL uses HTTPS with credentials
                 if [[ ! "$current_url" =~ ^https://[^@]+@[^/]+/.+ ]]; then
                     echo "Error: Current remote URL doesn't use HTTPS with credentials format" >&2
                     echo "Current URL: $current_url" >&2
                     return 1
                 fi
-                
-                # Load token from config
-                if [[ -z "$token" ]]; then
-                    echo "Error: TOKEN not set in config file $config_file" >&2
+
+                # Load token (and optional username) from config
+                local new_token=""
+                local new_username=""
+                if [[ -f "$config_file" ]]; then
+                    while IFS='=' read -r key value; do
+                        # Skip empty lines and comments
+                        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+                        key=$(echo "$key" | tr '[:lower:]' '[:upper:]')
+                        case "$key" in
+                            TOKEN)
+                                new_token="$value"
+                                ;;
+                            USERNAME)
+                                new_username="$value"
+                                ;;
+                        esac
+                    done < "$config_file"
+                fi
+
+                if [[ -z "$new_token" ]]; then
+                    echo "Error: TOKEN is not set in $config_file" >&2
                     return 1
                 fi
-                
-                # Extract parts from current URL
-                # URL format: https://username:old_token@host/account/repo.git
-                local url_pattern='^https://([^:]+):([^@]+)@(.+)$'
-                if [[ "$current_url" =~ $url_pattern ]]; then
-                    local url_username="${BASH_REMATCH[1]}"
-                    local url_rest="${BASH_REMATCH[3]}"  # host/account/repo.git
-                    
-                    # Construct new URL with updated token
-                    local new_url="https://${url_username}:${token}@${url_rest}"
-                    
-                    echo "Updating remote origin URL with new token..."
-                    echo "Old URL: https://${url_username}:${BASH_REMATCH[2]}@${url_rest}"
-                    echo "New URL: https://${url_username}:${token}@${url_rest}"
-                    
-                    # Update the remote URL
-                    if git remote set-url origin "$new_url"; then
-                        echo "Successfully updated remote origin URL with new token"
+
+                # Parse the current URL into parts
+                # Matches: https://user[:whatever]@host/path
+                if [[ "$current_url" =~ ^https://([^:@]+)(:[^@]*)?@([^/]+)/(.*)$ ]]; then
+                    local current_user="${BASH_REMATCH[1]}"
+                    local host="${BASH_REMATCH[3]}"
+                    local path="${BASH_REMATCH[4]}"
+                    local final_user="${new_username:-$current_user}"
+
+                    local new_url="https://${final_user}:${new_token}@${host}/${path}"
+
+                    if [[ "$print_only" == "true" ]]; then
+                        # Just show the command that would be run
+                        echo "git remote set-url origin \"$new_url\""
                     else
-                        echo "Error: Failed to update remote URL" >&2
-                        return 1
+                        # Update the remote URL
+                        if git remote set-url origin "$new_url"; then
+                            echo "Successfully updated remote origin URL with new token"
+                        else
+                            echo "Error: Failed to update remote URL" >&2
+                            return 1
+                        fi
                     fi
                 else
                     echo "Error: Could not parse current remote URL format" >&2
@@ -163,28 +205,8 @@ EOF
                 return 0
                 ;;
             --help)
-                echo "Usage: git_clone <REPO_NAME> [OPTIONS]"
-                echo ""
-                echo "Clone a git repository using username and token authentication"
-                echo ""
-                echo "Arguments:"
-                echo "  REPO_NAME                 Repository name (required)"
-                echo ""
-                echo "Options:"
-                echo "  -u, --username USERNAME   Git username"
-                echo "  -t, --token TOKEN         Git token" 
-                echo "  -h, --host HOST           Git host (default: gitlab.com)"
-                echo "  -a, --account ACCOUNT     Git account/organization"
-                echo "  --config                  Show current config"
-                echo "  --init-config             Create example config file"
-                echo "  --update-token            Update remote origin URL with token from config"
-                echo "  --help                    Show this help message"
-                echo ""
-                echo "Configuration:"
-                echo "  Config file: $config_file"
-                echo "  Set USERNAME, TOKEN, GIT_HOST, and GIT_ACCOUNT in the config file"
-                echo ""
-                return 0
+                show_help=true
+                shift
                 ;;
             -*)
                 echo "Error: Unknown option $1" >&2
@@ -204,15 +226,19 @@ EOF
         esac
     done
     
-    # Check if repo_name is provided
+    # If help requested, display and exit
+    if [[ "$show_help" == true ]]; then
+        show_git_clone_usage
+        return 0
+    fi
+    
+    # Validate required parameters
     if [[ -z "$repo_name" ]]; then
         echo "Error: Repository name is required" >&2
-        echo "Usage: git_clone <REPO_NAME> [OPTIONS]" >&2
-        echo "Use --help for more information" >&2
+        echo "Use --help for usage information" >&2
         return 1
     fi
     
-    # Validate required variables
     if [[ -z "$username" ]]; then
         echo "Error: USERNAME not set. Set it in $config_file or use -u flag" >&2
         return 1
@@ -236,7 +262,6 @@ EOF
     
     git clone "$clone_url"
 }
-
 
 
 

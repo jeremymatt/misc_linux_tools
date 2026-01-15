@@ -1,34 +1,25 @@
 #!/usr/bin/env python3
 """
-passphrase_gen.py
-
-Generates high-entropy passphrases from a large wordlist.
+High-entropy passphrase generator.
 
 Defaults:
   - 4 words
-  - separator is a randomly selected symbol (per passphrase)
-  - uses a large system wordlist if available (e.g., /usr/share/dict/words)
+  - random separator symbol
+  - large wordlist if available
 
-Examples:
-  ./passphrase_gen.py
-  ./passphrase_gen.py --words 6
-  ./passphrase_gen.py --count 10
-  ./passphrase_gen.py --sep "-"              # fixed separator
-  ./passphrase_gen.py --sep-set "_-.:+@"     # choose randomly from these
-  ./passphrase_gen.py --wordlist ./words.txt
-  ./passphrase_gen.py --download-eff         # downloads EFF long wordlist (7776 words)
+Options:
+  --nums                Ensure at least one digit appears
+  --rand_caps word      Randomly capitalize entire words
+  --rand_caps char      Randomly capitalize individual characters
 """
 
-from __future__ import annotations
-
 import argparse
-import os
-import re
 import secrets
+import string
 import sys
-import urllib.request
+import re
 from pathlib import Path
-from typing import Iterable, List, Optional
+import urllib.request
 
 
 DEFAULT_SEP_SET = "!@#$%^&*_-+=:.?/"
@@ -37,252 +28,154 @@ DEFAULT_WORDLIST_CANDIDATES = [
     "/usr/dict/words",
 ]
 
-
-# Small fallback list if no large wordlist is found and user doesn't provide one.
-# The intent is that most systems will use /usr/share/dict/words (or user-supplied list).
-FALLBACK_WORDS = """
-abacus abandon ability abrupt academy acorn across action active adapt admire
-advice airport almond anchor ancient angle animal ankle answer anthem anyone
-apricot arcade arctic artist atom audit autumn avenue bacon badge balance banner
-barrel basic battery beacon beauty begin belong bicycle bitter blanket blossom
-border borrow bracket breeze bronze cabin cactus camera canyon captain carbon
-carpet castle causal cedar celery cement chance chapter cherry circle civic
-climate coast coffee comet common concert copper coral cotton council cousin
-cradle craft credit creek crimson crisp critic cosmic custom dance decade decide
-demand desert design detail device dinner direct district dragon drift during
-eager earthly echo eclipse editor effect effort eight either elbow elder elect
-ember emerge emotion employ enable engine enough enjoy enrich escape estate ethics
-evening exact exile exist expand expert expose fabric falcon family famous fancy
-federal ferry fever fiction filter final finish fiscal flame forest fossil frame
-frequent friendly galaxy garden garment gentle glacier golden gravity habitat
-harbor hazard hero hidden honest horizon humble hybrid idea ignore image impact
-income index indoor infant inform inherit island jewel jungle kettle ladder
-lantern laptop legacy lemon liberty linen lion logic lunar magnet maple marble
-market meadow memory merit mimic mineral mirror mobile moment monarch monitor
-mosaic mountain museum nation nectar neutral nickel normal notice object orbit
-origin output oxygen palace panel parent patient percent phoenix picnic pioneer
-pocket polar portal postage power prefer pressure problem process profit public
-quiet radar radius random raven ready reason record reform report rhythm ribbon
-river robust rocket romance routine rural salad salmon satellite science secret
-senior shadow signal silver simple sister slate solar solid summit symbol system
-talent temple theory thunder timber token topic travel treaty tunnel uniform
-update useful vacuum velvet vendor verdict vessel veteran violet vision vivid
-wagon walnut window winter wisdom wonder woven yellow zenith
-""".split()
-
-
 EFF_LONG_URL = "https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt"
 DEFAULT_EFF_FILENAME = "eff_large_wordlist.txt"
 
 
-def eprint(*args: object) -> None:
-    print(*args, file=sys.stderr)
+FALLBACK_WORDS = """
+orbit slate lantern harbor cactus wagon ethics copper bundle quiet ribbon falcon magnet
+summit violet pocket entropy drift cabin ember signal mango stitch river temple velvet
+glacier kettle fossil canopy lunar maple marble meadow memory mirror mobile monarch
+mosaic mountain nectar nickel normal object orbit oxygen palace parent phoenix picnic
+pocket polar portal power prefer pressure problem process quiet radar ribbon robust
+rocket romance routine salmon science secret shadow silver simple solar solid summit
+symbol system talent temple theory thunder timber travel tunnel velvet vision vivid
+wagon walnut window winter wisdom wonder yellow zenith
+""".split()
 
 
-def is_reasonable_word(word: str, *, min_len: int, max_len: int, allow_apostrophe: bool) -> bool:
-    w = word.strip()
-    if not w:
-        return False
-    if len(w) < min_len or len(w) > max_len:
-        return False
-
-    # Filter out proper nouns / acronyms and non-words from system dictionaries.
-    # We keep: lowercase letters (optionally apostrophe).
-    if allow_apostrophe:
-        return bool(re.fullmatch(r"[a-z]+(?:'[a-z]+)?", w))
-    return bool(re.fullmatch(r"[a-z]+", w))
+def eprint(*a):
+    print(*a, file=sys.stderr)
 
 
-def load_words_from_file(path: Path, *, min_len: int, max_len: int, allow_apostrophe: bool) -> List[str]:
-    words: List[str] = []
-    with path.open("r", encoding="utf-8", errors="ignore") as f:
+def valid_word(w, min_len, max_len):
+    return min_len <= len(w) <= max_len and re.fullmatch(r"[a-z]+", w)
+
+
+def load_words(path, min_len, max_len):
+    out = []
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             w = line.strip().lower()
-            if is_reasonable_word(w, min_len=min_len, max_len=max_len, allow_apostrophe=allow_apostrophe):
-                words.append(w)
-    # Deduplicate while preserving order
-    seen = set()
-    uniq: List[str] = []
-    for w in words:
-        if w not in seen:
-            uniq.append(w)
-            seen.add(w)
-    return uniq
+            if valid_word(w, min_len, max_len):
+                out.append(w)
+    return list(dict.fromkeys(out))
 
 
-def find_default_wordlist() -> Optional[Path]:
+def find_default_wordlist():
     for p in DEFAULT_WORDLIST_CANDIDATES:
-        path = Path(p)
-        if path.exists() and path.is_file():
-            return path
+        if Path(p).exists():
+            return Path(p)
     return None
 
 
-def download_eff_wordlist(dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    eprint(f"Downloading EFF wordlist to: {dest}")
-    with urllib.request.urlopen(EFF_LONG_URL, timeout=30) as resp:
-        content = resp.read()
-    dest.write_bytes(content)
-    eprint("Download complete.")
+def download_eff(dest):
+    eprint("Downloading EFF wordlist…")
+    data = urllib.request.urlopen(EFF_LONG_URL).read()
+    dest.write_bytes(data)
+    eprint("Done.")
 
 
-def parse_eff_wordlist(path: Path, *, min_len: int, max_len: int, allow_apostrophe: bool) -> List[str]:
-    """
-    EFF file format: "<dice> <word>" per line, e.g. "11111 abacus"
-    """
-    words: List[str] = []
-    with path.open("r", encoding="utf-8", errors="ignore") as f:
+def parse_eff(path, min_len, max_len):
+    words = []
+    with open(path, "r") as f:
         for line in f:
-            line = line.strip()
-            if not line:
-                continue
             parts = line.split()
-            if len(parts) < 2:
-                continue
-            w = parts[1].strip().lower()
-            if is_reasonable_word(w, min_len=min_len, max_len=max_len, allow_apostrophe=allow_apostrophe):
-                words.append(w)
-    # EFF list already unique, but dedupe anyway
+            if len(parts) >= 2:
+                w = parts[1].lower()
+                if valid_word(w, min_len, max_len):
+                    words.append(w)
     return list(dict.fromkeys(words))
 
 
-def choose_separator(sep: Optional[str], sep_set: str) -> str:
-    if sep is not None:
+def random_sep(sep, sep_set):
+    if sep:
         return sep
-    if not sep_set:
-        # If user empties sep-set, fall back to a hyphen.
-        return "-"
     return secrets.choice(list(sep_set))
 
 
-def generate_passphrase(
-    words: List[str],
-    *,
-    n_words: int,
-    separator: str,
-    titlecase: bool,
-) -> str:
-    chosen = [secrets.choice(words) for _ in range(n_words)]
-    if titlecase:
-        # Randomly title-case exactly one word for slight entropy and readability
-        idx = secrets.randbelow(len(chosen))
-        chosen[idx] = chosen[idx].capitalize()
-    return separator.join(chosen)
+def apply_word_caps(words):
+    n = len(words)
+
+    # Choose how many words to capitalize: 1 .. n
+    count = secrets.randbelow(n) + 1
+
+    # Select unique indices securely
+    idxs = set()
+    while len(idxs) < count:
+        idxs.add(secrets.randbelow(n))
+
+    for i in idxs:
+        words[i] = words[i].upper()
+
+    return words
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        description="Generate passphrases from a large wordlist.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    ap.add_argument("--words", type=int, default=4, help="Number of words per passphrase.")
-    ap.add_argument("--count", type=int, default=1, help="Number of passphrases to output.")
-    ap.add_argument("--sep", default=None, help="Fixed separator string. If omitted, choose randomly from --sep-set.")
-    ap.add_argument(
-        "--sep-set",
-        default=DEFAULT_SEP_SET,
-        help="Set of separator characters to choose from when --sep is not provided.",
-    )
-    ap.add_argument(
-        "--wordlist",
-        default=None,
-        help="Path to a wordlist file (one word per line). If omitted, tries common system dictionaries.",
-    )
-    ap.add_argument(
-        "--download-eff",
-        action="store_true",
-        help=f"Download the EFF large wordlist ({DEFAULT_EFF_FILENAME}) into the current directory and use it.",
-    )
-    ap.add_argument("--min-len", type=int, default=4, help="Minimum word length to include.")
-    ap.add_argument("--max-len", type=int, default=10, help="Maximum word length to include.")
-    ap.add_argument(
-        "--allow-apostrophe",
-        action="store_true",
-        help="Allow words containing a single apostrophe (e.g., don't).",
-    )
-    ap.add_argument(
-        "--titlecase",
-        action="store_true",
-        help="Randomly TitleCase one word in each passphrase.",
-    )
+def apply_char_caps(s):
+    out = []
+    for c in s:
+        if c.isalpha() and secrets.randbelow(4) == 0:
+            out.append(c.upper())
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+def inject_digit(s):
+    pos = secrets.randbelow(len(s) + 1)
+    return s[:pos] + secrets.choice(string.digits) + s[pos:]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--words", type=int, default=4)
+    ap.add_argument("--count", type=int, default=1)
+    ap.add_argument("--sep", default=None)
+    ap.add_argument("--sep-set", default=DEFAULT_SEP_SET)
+    ap.add_argument("--wordlist", default=None)
+    ap.add_argument("--download-eff", action="store_true")
+    ap.add_argument("--min-len", type=int, default=4)
+    ap.add_argument("--max-len", type=int, default=10)
+    ap.add_argument("--nums", action="store_true")
+    ap.add_argument("--rand_caps", choices=["word", "char"])
 
     args = ap.parse_args()
 
-    if args.words < 2:
-        eprint("Error: --words must be >= 2 for a sensible passphrase.")
-        return 2
-    if args.count < 1:
-        eprint("Error: --count must be >= 1.")
-        return 2
-    if args.min_len < 1 or args.max_len < args.min_len:
-        eprint("Error: invalid --min-len/--max-len.")
-        return 2
-
-    # Determine wordlist source
-    words: List[str] = []
-
-    if args.download_eff:
-        eff_path = Path.cwd() / DEFAULT_EFF_FILENAME
-        if not eff_path.exists():
-            download_eff_wordlist(eff_path)
-        words = parse_eff_wordlist(
-            eff_path,
-            min_len=args.min_len,
-            max_len=args.max_len,
-            allow_apostrophe=args.allow_apostrophe,
-        )
+    if args.wordlist:
+        words = load_words(args.wordlist, args.min_len, args.max_len)
+    elif args.download_eff:
+        p = Path(DEFAULT_EFF_FILENAME)
+        if not p.exists():
+            download_eff(p)
+        words = parse_eff(p, args.min_len, args.max_len)
     else:
-        wl_path: Optional[Path] = None
-        if args.wordlist:
-            wl_path = Path(args.wordlist)
-            if not wl_path.exists() or not wl_path.is_file():
-                eprint(f"Error: wordlist file not found: {wl_path}")
-                return 2
-            words = load_words_from_file(
-                wl_path,
-                min_len=args.min_len,
-                max_len=args.max_len,
-                allow_apostrophe=args.allow_apostrophe,
-            )
+        p = find_default_wordlist()
+        if p:
+            words = load_words(p, args.min_len, args.max_len)
         else:
-            default_path = find_default_wordlist()
-            if default_path is not None:
-                words = load_words_from_file(
-                    default_path,
-                    min_len=args.min_len,
-                    max_len=args.max_len,
-                    allow_apostrophe=args.allow_apostrophe,
-                )
-            else:
-                words = [w for w in FALLBACK_WORDS if is_reasonable_word(
-                    w, min_len=args.min_len, max_len=args.max_len, allow_apostrophe=args.allow_apostrophe
-                )]
+            words = [w for w in FALLBACK_WORDS if valid_word(w, args.min_len, args.max_len)]
 
-    if len(words) < 1000:
-        eprint(
-            f"Warning: wordlist size is only {len(words)} words after filtering. "
-            "For best results, use --download-eff or provide a large custom --wordlist."
-        )
-    if len(words) == 0:
-        eprint("Error: no usable words available after filtering.")
-        return 2
+    if len(words) < 500:
+        eprint(f"Warning: wordlist only {len(words)} words")
 
-    # Generate
     for _ in range(args.count):
-        sep = choose_separator(args.sep, args.sep_set)
-        print(
-            generate_passphrase(
-                words,
-                n_words=args.words,
-                separator=sep,
-                titlecase=args.titlecase,
-            )
-        )
+        sep = random_sep(args.sep, args.sep_set)
+        chosen = [secrets.choice(words) for _ in range(args.words)]
 
-    return 0
+        if args.rand_caps == "word":
+            chosen = apply_word_caps(chosen)
+
+        s = sep.join(chosen)
+
+        if args.rand_caps == "char":
+            s = apply_char_caps(s)
+
+        if args.nums:
+            s = inject_digit(s)
+
+        print(s)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
 

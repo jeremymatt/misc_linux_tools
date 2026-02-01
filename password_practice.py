@@ -7,7 +7,7 @@ Created on Fri Dec  3 17:20:55 2021
 
 import getpass
 
-pwd = getpass.getpass('Enter password')
+pwd = getpass.getpass('Enter password: ')
 
 guess = None
 while guess != 'e':
@@ -15,6 +15,6 @@ while guess != 'e':
         guess = getpass.getpass('Enter guess (e for exit): ')
     else:
         if guess == pwd:
-            guess = getpass.getpass('\r{} is Correct!!! Try again? (e for exit): '.format(guess))
+            guess = getpass.getpass('\rCorrect!!! Try again? (e for exit): ')
         else:
-            guess = getpass.getpass('\r{} is WRONG!!!!! Try again? (e for exit): '.format(guess))
+            guess = getpass.getpass('\rWRONG!!!!! You entered "{}". Try again? (e for exit): '.format(guess))

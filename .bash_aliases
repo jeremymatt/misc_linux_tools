@@ -14,6 +14,19 @@ tm() {
     fi
 }
 
+del_zi () {
+    local start_dir="${1:-.}"
+
+    if [[ ! -d "$start_dir" ]]; then
+        echo "Error: '$start_dir' is not a directory"
+        return 1
+    fi
+
+    echo "Removing Zone.Identifier files under: $start_dir"
+    find "$start_dir" -type f -name '*:Zone.Identifier' -print -delete
+    echo "Done."
+}
+
 findgrep() {
     if [[ $# -lt 2 ]]; then
         echo "Usage: findgrep <dir> <pattern>" >&2
@@ -276,6 +289,9 @@ EOF
     git clone "$clone_url"
 }
 
+if [ -f ~/.dir2txt ]; then
+    . ~/.dir2txt
+fi
 
 
 
